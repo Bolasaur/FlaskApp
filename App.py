@@ -6,9 +6,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 app = Flask(__name__)
 
-# Path to matchup data file
-import pandas as pd
-
 def update_data():
     global matchup_data_file_path, effectiveness_scores_file_path
     global matchup_data_df, effectiveness_scores_df
@@ -48,7 +45,7 @@ def update_data():
         recorded_winrate = row["# of match wins"] / times_fought
 
         # Bayesian adjustment using an inversely proportional K factor
-        adjusted_playrate = ((times_fought) + (expected_playrate * (1 / total_games_played))) / (total_games_played + (1 / total_games_played))
+        adjusted_playrate = ((times_fought) + (expected_playrate * (5 / total_games_played))) / (total_games_played + (5 / total_games_played))
         adjusted_winrate = ((recorded_winrate) * (times_fought) + (0.5 * (30 / times_fought))) / ((30 / times_fought) + times_fought)
 
         matchup_data[deck_name] = {
