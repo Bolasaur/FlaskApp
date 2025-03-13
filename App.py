@@ -18,7 +18,7 @@ def update_data():
     google_creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
     if google_creds_json:
         google_creds_dict = json.loads(google_creds_json)
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(google_creds_dict, scope=scope)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(google_creds_dict)
     else:
         raise ValueError("Google Sheets credentials not found in environment variables.")
     client = gspread.authorize(creds)
