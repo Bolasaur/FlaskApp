@@ -3,6 +3,8 @@ import pandas as pd
 import requests
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import os
+import json
 
 app = Flask(__name__)
 
@@ -13,7 +15,12 @@ def update_data():
     global matchup_data, total_games_played
 
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name("google_sheets_credentials.json", scope)
+    google_creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
+    if google_creds_json:
+        google_creds_dict = json.loads(google_creds_json)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(google_creds_dict, scope=scope)
+    else:
+        raise ValueError("Google Sheets credentials not found in environment variables.")
     client = gspread.authorize(creds)
 
     matchup_data_file_path = client.open("Matchup_Data_Cloud")
