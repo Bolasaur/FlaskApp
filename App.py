@@ -5,6 +5,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import os
 import json
+from gspread.utils import rowcol_to_a1
 
 app = Flask(__name__)
 
@@ -15,6 +16,7 @@ def update_data():
     global matchup_data, total_games_played
 
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    #creds = ServiceAccountCredentials.from_json_keyfile_name("google_sheets_credentials.json", scope)
     google_creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
     if google_creds_json:
         google_creds_dict = json.loads(google_creds_json)
@@ -948,7 +950,7 @@ def view_cards():
             new_score = int(request.form.get(f"effectiveness[{deck}]"))
             col_index = header.index(deck) + 1  # Get column index for the deck
             updates.append({
-                "range": f"{chr(64 + col_index)}{row_index}",  # Convert index to Google Sheets column letter
+                "range": rowcol_to_a1(row_index, col_index),  # Convert index to Google Sheets column letter
                 "values": [[new_score]]
             })
 
