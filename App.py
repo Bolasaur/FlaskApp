@@ -1,6 +1,8 @@
 from flask import Flask, render_template_string , request, render_template, redirect, url_for
 import pandas as pd
-import os
+import requests
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 app = Flask(__name__)
 
@@ -13,11 +15,17 @@ def update_data():
     global effectiveness_scores, max_card_copies
     global matchup_data, total_games_played
 
-    matchup_data_file_path = "C:/Users/Brayd/iCloudDrive/FlaskApp/Server_Files/Matchup_Data.csv"
-    effectiveness_scores_file_path = "C:/Users/Brayd/iCloudDrive/FlaskApp/Server_Files/Effectiveness_Scores.csv"
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name("google_sheets_credentials.json", scope)
+    client = gspread.authorize(creds)
 
-    matchup_data_df = pd.read_csv(matchup_data_file_path)
-    effectiveness_scores_df = pd.read_csv(effectiveness_scores_file_path)
+    matchup_data_file_path = client.open("Matchup_Data_Cloud")
+    sheet1 = matchup_data_file_path.sheet1
+    effectiveness_scores_file_path = client.open("Effectiveness_Scores_Cloud")
+    sheet2 = effectiveness_scores_file_path.sheet1
+
+    matchup_data_df = pd.DataFrame(sheet1.get_all_records())
+    effectiveness_scores_df = pd.DataFrame(sheet2.get_all_records())
 
     effectiveness_scores = {}
     max_card_copies = {}
@@ -235,9 +243,9 @@ def home():
 
 @app.route("/add_card", methods=["GET", "POST"])
 def add_card():
-    global effectiveness_scores_file_path
+    global effectiveness_scores_file_path  # This is still your Google Sheet object
 
-    # Read the CSV to get deck names
+    # Read data from Google Sheets to get deck names
     update_data()
     deck_names = list(effectiveness_scores_df.columns[2:])  # Ignore first two columns
 
@@ -251,13 +259,10 @@ def add_card():
             value = int(request.form.get(f"effectiveness[{deck}]"))
             effectiveness_values.append(value)
 
-        # Create a new DataFrame row
-        new_card = pd.DataFrame([[card_name, max_copies] + effectiveness_values], 
-                                columns=effectiveness_scores_df.columns)
-
-        # Append new data to CSV
-        effectiveness_scores_df.loc[len(effectiveness_scores_df)] = new_card.iloc[0]
-        effectiveness_scores_df.to_csv(effectiveness_scores_file_path, index=False)
+        # Append new row to Google Sheet
+        new_row = [card_name, max_copies] + effectiveness_values
+        sheet = effectiveness_scores_file_path.sheet1  # Get the first sheet
+        sheet.append_row(new_row, value_input_option="USER_ENTERED")
 
         return redirect(url_for("home"))  # Redirect to home page after adding
 
@@ -331,11 +336,12 @@ def add_card():
 
     return render_template_string(add_card_html, deck_names=deck_names)
 
+
 @app.route("/add_deck", methods=["GET", "POST"])
 def add_deck():
     global effectiveness_scores_file_path, matchup_data_file_path
 
-    # Read existing data from CSVs
+    # Read existing data from Google Sheets
     update_data()
 
     if request.method == "POST":
@@ -344,11 +350,10 @@ def add_deck():
         mtgo_pr = float(request.form.get("mtgo_pr"))
         max_slots = int(request.form.get("max_slots"))
 
-        # Add new deck to Matchup_Data.csv
-        new_deck = pd.DataFrame([[deck_name, mtgo_pr, max_slots, 0, 0]], 
-                                columns=matchup_data_df.columns)
-        matchup_data_df.loc[len(matchup_data_df)] = new_deck.iloc[0]
-        matchup_data_df.to_csv(matchup_data_file_path, index=False)
+        # Add new deck to Matchup_Data_Cloud
+        new_deck_row = [deck_name, mtgo_pr, max_slots, 0, 0]
+        sheet1 = matchup_data_file_path.sheet1  # Get first sheet of Matchup_Data_Cloud
+        sheet1.append_row(new_deck_row, value_input_option="USER_ENTERED")
 
         # Get effectiveness scores for the new deck
         effectiveness_values = []
@@ -356,9 +361,20 @@ def add_deck():
             value = int(request.form.get(f"effectiveness[{row['Card Name']}]"))
             effectiveness_values.append(value)
 
-        # Add the new deck as a column in Effectiveness_Scores.csv
-        effectiveness_scores_df[deck_name] = effectiveness_values
-        effectiveness_scores_df.to_csv(effectiveness_scores_file_path, index=False)
+        # Add the new deck as a column in Effectiveness_Scores_Cloud
+        sheet2 = effectiveness_scores_file_path.sheet1  # Get first sheet of Effectiveness_Scores_Cloud
+        all_data = sheet2.get_all_values()  # Fetch all values to preserve structure
+
+        # Insert new column with effectiveness scores
+        if all_data:
+            for i in range(1, len(all_data)):  # Skip header row
+                all_data[i].append(str(effectiveness_values[i - 1]))
+
+            # Add deck name to the header row
+            all_data[0].append(deck_name)
+
+            # Update the entire sheet in one batch operation
+            sheet2.update(all_data)
 
         return redirect(url_for("home"))  # Redirect to home page after adding
 
@@ -408,7 +424,7 @@ def add_deck():
                 </div>
 
                 <div class="form-group">
-                    <label for="mtgo_pr" class="form-label">MTGO PR (Win Rate Estimation):</label>
+                    <label for="mtgo_pr" class="form-label">MTGO PR (Play Rate Estimation):</label>
                     <input type="number" class="form-control" id="mtgo_pr" name="mtgo_pr" step="0.01" required>
                 </div>
 
@@ -441,8 +457,14 @@ def add_deck():
 def add_match():
     global matchup_data_file_path
 
-    # Load existing matchup data
+    # Load existing matchup data from Google Sheets
     update_data()
+    sheet = matchup_data_file_path.sheet1  # Get the first sheet
+
+    # Read the data from Google Sheets
+    matchup_data_list = sheet.get_all_values()
+    header = matchup_data_list[0]  # First row (column names)
+    data_rows = matchup_data_list[1:]  # All remaining rows (actual data)
 
     if request.method == "POST":
         # Get user inputs from the form
@@ -450,7 +472,8 @@ def add_match():
         match_result = request.form.get("match_result")  # Expected format: "2-0", "1-2", etc.
 
         # Ensure the deck exists
-        if deck_name not in matchup_data_df["Deck"].values:
+        deck_names = [row[0] for row in data_rows]  # Extract deck names from first column
+        if deck_name not in deck_names:
             return f"<h1>Error</h1><p>Deck '{deck_name}' not found. Please add it first.</p>"
 
         # Parse match result
@@ -462,13 +485,24 @@ def add_match():
         # Determine if the match was won (if wins > losses, it's a match win)
         match_win = 1 if wins > losses else 0
 
-        # Update deck data
-        idx = matchup_data_df[matchup_data_df["Deck"] == deck_name].index[0]
-        matchup_data_df.at[idx, "# of times fought"] += 1
-        matchup_data_df.at[idx, "# of match wins"] += match_win
+        # Find the row index of the deck
+        row_index = deck_names.index(deck_name) + 2  # +2 because of 1-based index and header row
 
-        # Save changes
-        matchup_data_df.to_csv(matchup_data_file_path, index=False)
+        # Column indices (1-based indexing for Google Sheets)
+        col_fought = header.index("# of times fought") + 1
+        col_wins = header.index("# of match wins") + 1
+
+        # Read existing values
+        current_fought = int(sheet.cell(row_index, col_fought).value)
+        current_wins = int(sheet.cell(row_index, col_wins).value)
+
+        # Update values
+        new_fought = current_fought + 1
+        new_wins = current_wins + match_win
+
+        # Batch update to avoid multiple calls
+        sheet.update_cell(row_index, col_fought, new_fought)
+        sheet.update_cell(row_index, col_wins, new_wins)
 
         return redirect(url_for("home"))  # Redirect to home after adding match
 
@@ -537,36 +571,47 @@ def add_match():
     </html>
     """
 
-    return render_template_string(add_match_html, deck_names=matchup_data_df["Deck"].tolist())
+    return render_template_string(add_match_html, deck_names=[row[0] for row in data_rows])
+
 
 @app.route("/remove_deck", methods=["GET", "POST"])
 def remove_deck():
-    global matchup_data_df, effectiveness_scores_df
+    global matchup_data_file_path, effectiveness_scores_file_path
 
-    # Load the latest versions of both CSV files
+    # Load the latest versions of both Google Sheets
     update_data()
 
-    # Extract available deck names (ignoring first two columns in effectiveness scores)
-    deck_names = list(effectiveness_scores_df.columns[2:])
+    sheet1 = matchup_data_file_path.sheet1  # Matchup Data
+    sheet2 = effectiveness_scores_file_path.sheet1  # Effectiveness Scores
+
+    # Extract deck names from Effectiveness Scores (columns after first two)
+    all_data = sheet2.get_all_values()
+    deck_names = all_data[0][2:] if all_data else []  # Extract headers after first two columns
 
     if request.method == "POST":
         deck_name = request.form.get("deck_name")  # Get selected deck
 
         # Ensure the deck exists
         if deck_name not in deck_names:
-            return f"<h1>Error</h1><p>Deck '{deck_name}' not found in Effectiveness_Scores.csv.</p>"
-        if deck_name not in matchup_data_df["Deck"].values:
-            return f"<h1>Error</h1><p>Deck '{deck_name}' not found in Matchup_Data.csv.</p>"
+            return f"<h1>Error</h1><p>Deck '{deck_name}' not found in Effectiveness_Scores_Cloud.</p>"
+        
+        # Load Matchup Data
+        matchup_data_list = sheet1.get_all_values()
+        header = matchup_data_list[0]
+        data_rows = matchup_data_list[1:]
 
-        # Remove the deck (column) from effectiveness scores
-        effectiveness_scores_df.drop(columns=[deck_name], inplace=True)
+        deck_names_matchup = [row[0] for row in data_rows]  # Deck names from the first column
 
-        # Remove the deck (row) from matchup data
-        matchup_data_df = matchup_data_df[matchup_data_df["Deck"] != deck_name]
+        if deck_name not in deck_names_matchup:
+            return f"<h1>Error</h1><p>Deck '{deck_name}' not found in Matchup_Data_Cloud.</p>"
 
-        # Save updated datasets
-        effectiveness_scores_df.to_csv(effectiveness_scores_file_path, index=False)
-        matchup_data_df.to_csv(matchup_data_file_path, index=False)
+        ### **STEP 1: Remove Deck (Row) from Matchup_Data_Cloud**
+        row_index = deck_names_matchup.index(deck_name) + 2  # +2 to adjust for 1-based indexing and header
+        sheet1.delete_rows(row_index)
+
+        ### **STEP 2: Remove Deck (Column) from Effectiveness_Scores_Cloud**
+        col_index = deck_names.index(deck_name) + 3  # +3 because first two columns are ignored
+        sheet2.delete_columns(col_index)
 
         return redirect(url_for("home"))  # Redirect to home after deletion
 
@@ -639,23 +684,33 @@ def remove_deck():
 
 @app.route("/remove_card", methods=["GET", "POST"])
 def remove_card():
-    global effectiveness_scores_df
+    global effectiveness_scores_file_path
 
-    # Load the latest version of Effectiveness_Scores.csv
+    # Load the latest version of Effectiveness_Scores_Cloud
     update_data()
+
+    sheet = effectiveness_scores_file_path.sheet1  # First sheet in Google Sheets
+
+    # Read data from Google Sheets
+    all_data = sheet.get_all_values()
+    header = all_data[0] if all_data else []  # Extract column names
+    data_rows = all_data[1:]  # All rows excluding headers
+
+    # Get the list of card names (first column)
+    card_names = [row[0] for row in data_rows]
 
     if request.method == "POST":
         card_name = request.form.get("card_name")  # Get the selected card
 
-        # Check if card exists
-        if card_name not in effectiveness_scores_df["Card Name"].values:
-            return f"<h1>Error</h1><p>Card '{card_name}' not found.</p>"
+        # Check if the card exists
+        if card_name not in card_names:
+            return f"<h1>Error</h1><p>Card '{card_name}' not found in Effectiveness_Scores_Cloud.</p>"
 
-        # Remove the card from the DataFrame
-        effectiveness_scores_df = effectiveness_scores_df[effectiveness_scores_df["Card Name"] != card_name]
+        # Find the row index of the card
+        row_index = card_names.index(card_name) + 2  # +2 because of 1-based index and header
 
-        # Save the updated dataset
-        effectiveness_scores_df.to_csv(effectiveness_scores_file_path, index=False)
+        # Delete the row in Google Sheets
+        sheet.delete_rows(row_index)
 
         return redirect(url_for("home"))  # Redirect to home after deletion
 
@@ -724,14 +779,24 @@ def remove_card():
     </html>
     """
 
-    return render_template_string(remove_card_html, card_names=effectiveness_scores_df["Card Name"].tolist())
+    return render_template_string(remove_card_html, card_names=card_names)
 
 @app.route("/view_decks", methods=["GET", "POST"])
 def view_decks():
     global matchup_data_file_path
 
-    # Load the latest version of Matchup_Data.csv
+    # Load the latest version of Matchup_Data_Cloud
     update_data()
+
+    sheet = matchup_data_file_path.sheet1  # Get the first sheet
+
+    # Read data from Google Sheets
+    all_data = sheet.get_all_values()
+    header = all_data[0] if all_data else []  # Extract column names
+    data_rows = all_data[1:]  # All rows excluding headers
+
+    # Extract deck names
+    deck_names = [row[0] for row in data_rows] if data_rows else []
 
     if request.method == "POST":
         # Handle deck editing form submission
@@ -740,23 +805,29 @@ def view_decks():
         new_max_slots = int(request.form.get("new_max_slots"))
 
         # Ensure the deck exists
-        if deck_name not in matchup_data_df["Deck"].values:
-            return f"<h1>Error</h1><p>Deck '{deck_name}' not found.</p>"
+        if deck_name not in deck_names:
+            return f"<h1>Error</h1><p>Deck '{deck_name}' not found in Matchup_Data_Cloud.</p>"
 
-        # Get index of the deck
-        deck_index = matchup_data_df[matchup_data_df["Deck"] == deck_name].index[0]
+        # Find the row index of the deck
+        row_index = deck_names.index(deck_name) + 2  # +2 to adjust for 1-based indexing and header row
 
-        # Update the deck's data
-        matchup_data_df.at[deck_index, "MTGO PR"] = new_mtgo_pr
-        matchup_data_df.at[deck_index, "Max Slots"] = new_max_slots
+        # Column indices (1-based index for Google Sheets)
+        col_mtgo_pr = header.index("MTGO PR") + 1
+        col_max_slots = header.index("Max Slots") + 1
 
-        # Save changes
-        matchup_data_df.to_csv(matchup_data_file_path, index=False)
+        # Update the deck's values in Google Sheets
+        sheet.update_cell(row_index, col_mtgo_pr, new_mtgo_pr)
+        sheet.update_cell(row_index, col_max_slots, new_max_slots)
 
         return redirect(url_for("view_decks"))  # Refresh the page after updating
 
-    # Convert the DataFrame to an HTML table
-    deck_table = matchup_data_df.to_html(classes="table table-striped table-hover", index=False)
+    # Convert the deck data to an HTML table
+    deck_table = "<table class='table table-striped table-hover'><thead><tr>"
+    deck_table += "".join(f"<th>{col}</th>" for col in header)
+    deck_table += "</tr></thead><tbody>"
+    for row in data_rows:
+        deck_table += "<tr>" + "".join(f"<td>{col}</td>" for col in row) + "</tr>"
+    deck_table += "</tbody></table>"
 
     # Enhanced HTML Template
     view_decks_html = """
@@ -829,14 +900,25 @@ def view_decks():
     </html>
     """
 
-    return render_template_string(view_decks_html, deck_table=deck_table, deck_names=matchup_data_df["Deck"].tolist())
+    return render_template_string(view_decks_html, deck_table=deck_table, deck_names=deck_names)
 
 @app.route("/view_cards", methods=["GET", "POST"])
 def view_cards():
     global effectiveness_scores_file_path
 
-    # Load the latest version of Effectiveness_Scores.csv
+    # Load the latest version of Effectiveness_Scores_Cloud
     update_data()
+
+    sheet = effectiveness_scores_file_path.sheet1  # Get the first sheet
+
+    # Read data from Google Sheets
+    all_data = sheet.get_all_values()
+    header = all_data[0] if all_data else []  # Extract column names
+    data_rows = all_data[1:]  # All rows excluding headers
+
+    # Extract card names (first column)
+    card_names = [row[0] for row in data_rows] if data_rows else []
+    deck_names = header[2:] if len(header) > 2 else []  # Skip first two columns
 
     if request.method == "POST":
         # Handle card editing form submission
@@ -844,27 +926,40 @@ def view_cards():
         new_max_copies = int(request.form.get("new_max_copies"))
 
         # Ensure the card exists
-        if card_name not in effectiveness_scores_df["Card Name"].values:
-            return f"<h1>Error</h1><p>Card '{card_name}' not found.</p>"
+        if card_name not in card_names:
+            return f"<h1>Error</h1><p>Card '{card_name}' not found in Effectiveness_Scores_Cloud.</p>"
 
-        # Get index of the card
-        card_index = effectiveness_scores_df[effectiveness_scores_df["Card Name"] == card_name].index[0]
+        # Find the row index of the card
+        row_index = card_names.index(card_name) + 2  # +2 to adjust for 1-based indexing and header row
 
-        # Update max copies
-        effectiveness_scores_df.at[card_index, "Max Copies"] = new_max_copies
+        # Column index for "Max Copies"
+        col_max_copies = header.index("Max Copies") + 1
+
+        # Update max copies in Google Sheets
+        sheet.update_cell(row_index, col_max_copies, new_max_copies)
 
         # Update effectiveness scores
-        for deck in effectiveness_scores_df.columns[2:]:  # Skip first two columns
+        updates = []
+        for deck in deck_names:
             new_score = int(request.form.get(f"effectiveness[{deck}]"))
-            effectiveness_scores_df.at[card_index, deck] = new_score
+            col_index = header.index(deck) + 1  # Get column index for the deck
+            updates.append({
+                "range": f"{chr(64 + col_index)}{row_index}",  # Convert index to Google Sheets column letter
+                "values": [[new_score]]
+            })
 
-        # Save changes
-        effectiveness_scores_df.to_csv(effectiveness_scores_file_path, index=False)
+        # Perform batch update
+        sheet.batch_update(updates)
 
         return redirect(url_for("view_cards"))  # Refresh the page after updating
 
-    # Convert the DataFrame to an HTML table
-    card_table = effectiveness_scores_df.to_html(classes="table table-striped table-hover", index=False)
+    # Convert the card data to an HTML table
+    card_table = "<table class='table table-striped table-hover'><thead><tr>"
+    card_table += "".join(f"<th>{col}</th>" for col in header)
+    card_table += "</tr></thead><tbody>"
+    for row in data_rows:
+        card_table += "<tr>" + "".join(f"<td>{col}</td>" for col in row) + "</tr>"
+    card_table += "</tbody></table>"
 
     # Enhanced HTML Template
     view_cards_html = """
@@ -945,8 +1040,8 @@ def view_cards():
 
     return render_template_string(view_cards_html, 
                                   card_table=card_table, 
-                                  card_names=effectiveness_scores_df["Card Name"].tolist(),
-                                  deck_names=effectiveness_scores_df.columns[2:].tolist())
+                                  card_names=card_names,
+                                  deck_names=deck_names)
 
 @app.route("/sideboard")
 def run_sideboard_optimizer():
