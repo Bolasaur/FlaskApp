@@ -929,7 +929,6 @@ def view_cards():
     if request.method == "POST":
         # Handle card editing form submission
         card_name = request.form.get("card_name")
-        new_max_copies = int(request.form.get("new_max_copies"))
 
         # Ensure the card exists
         if card_name not in card_names:
@@ -937,9 +936,17 @@ def view_cards():
 
         # Find the row index of the card
         row_index = card_names.index(card_name) + 2  # +2 to adjust for 1-based indexing and header row
+        card_row = data_rows[row_index - 2]  # Retrieve the row's current data
 
         # Column index for "Max Copies"
         col_max_copies = header.index("Max Copies") + 1
+        new_max_copies = request.form.get("new_max_copies")
+        
+        # Use existing value if the field is left empty
+        if new_max_copies.strip() == "":
+            new_max_copies = card_row[col_max_copies - 1]  # Adjust index to match data_rows
+        else:
+            new_max_copies = int(new_max_copies)
 
         # Update max copies in Google Sheets
         sheet.update_cell(row_index, col_max_copies, new_max_copies)
@@ -947,8 +954,15 @@ def view_cards():
         # Update effectiveness scores
         updates = []
         for deck in deck_names:
-            new_score = int(request.form.get(f"effectiveness[{deck}]"))
+            new_score = request.form.get(f"effectiveness[{deck}]")
             col_index = header.index(deck) + 1  # Get column index for the deck
+            
+            # Use existing value if the field is left empty
+            if new_score.strip() == "":
+                new_score = card_row[col_index - 1]  # Adjust index to match data_rows
+            else:
+                new_score = int(new_score)
+            
             updates.append({
                 "range": rowcol_to_a1(row_index, col_index),  # Convert index to Google Sheets column letter
                 "values": [[new_score]]
@@ -1023,14 +1037,14 @@ def view_cards():
 
                 <div class="form-group">
                     <label for="new_max_copies" class="form-label">New Max Copies:</label>
-                    <input type="number" class="form-control" id="new_max_copies" name="new_max_copies" min="0" required>
+                    <input type="number" class="form-control" id="new_max_copies" name="new_max_copies" min="0">
                 </div>
 
                 <h3 class="mt-3">Update Effectiveness Scores (1-10):</h3>
                 {% for deck in deck_names %}
                 <div class="form-group">
                     <label for="{{ deck }}" class="form-label">{{ deck }}:</label>
-                    <input type="number" class="form-control" id="{{ deck }}" name="effectiveness[{{ deck }}]" min="0" max="10" required>
+                    <input type="number" class="form-control" id="{{ deck }}" name="effectiveness[{{ deck }}]" min="0" max="10">
                 </div>
                 {% endfor %}
 
