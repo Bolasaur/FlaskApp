@@ -44,6 +44,7 @@ def update_data():
     # === Bayesian Adjustments for Play Rate & Win Rate ===
     matchup_data = {}
     total_games_played = matchup_data_df["# of times fought"].sum()
+    total_matchups = len(matchup_data_df)
 
     for _, row in matchup_data_df.iterrows():
         deck_name = row["Deck"]
@@ -54,8 +55,8 @@ def update_data():
         recorded_winrate = row["# of match wins"] / times_fought
 
         # Bayesian adjustment using an inversely proportional K factor
-        adjusted_playrate = ((times_fought) + (expected_playrate * (5 / total_games_played))) / (total_games_played + (5 / total_games_played))
-        adjusted_winrate = ((recorded_winrate) * (times_fought) + (0.5 * (30 / times_fought))) / ((30 / times_fought) + times_fought)
+        adjusted_playrate = ((times_fought) + (expected_playrate * (total_matchups / total_games_played))) / (total_games_played + (total_matchups / total_games_played))
+        adjusted_winrate = ((recorded_winrate) * (times_fought) + (0.5 * (100 / times_fought))) / ((100 / times_fought) + times_fought)
 
         matchup_data[deck_name] = {
             "adjusted_playrate": adjusted_playrate,
@@ -67,8 +68,9 @@ def update_data():
 
 def assign_sideboard_cards(remaining_slots):
     sideboard_map = {}
-    A = 0.7  # 70% priority to play rate
-    B = 0.3  # 30% priority to bad matchups
+    # A=2B based on expected sideboard effectiveness on tournament winrate
+    A = 2/3
+    B = 1/3 
 
     sorted_decks = sorted(
         matchup_data.items(),
@@ -887,8 +889,8 @@ def view_decks():
                 </div>
 
                 <div class="form-group">
-                    <label for="new_mtgo_pr" class="form-label">New MTGO PR (Win Rate Estimation):</label>
-                    <input type="number" class="form-control" id="new_mtgo_pr" name="new_mtgo_pr" step="0.01" required>
+                    <label for="new_mtgo_pr" class="form-label">New MTGO PR (Play Rate Estimation):</label>
+                    <input type="number" class="form-control" id="new_mtgo_pr" name="new_mtgo_pr" step="0.001" required>
                 </div>
 
                 <div class="form-group">
